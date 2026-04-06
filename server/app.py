@@ -8,6 +8,7 @@ from __future__ import annotations
 
 try:
     from openenv.core.env_server import create_fastapi_app  # type: ignore
+    from openenv.core.env_server.types import ConcurrencyConfig  # type: ignore
 
     from ..models import ModAction, ModObservation
     from .reddit_mod_environment import RedditModEnvironment
@@ -16,6 +17,10 @@ try:
         RedditModEnvironment,
         action_cls=ModAction,
         observation_cls=ModObservation,
+        concurrency_config=ConcurrencyConfig(
+            max_concurrent_envs=20,
+            session_timeout=120.0,  # auto-clean sessions idle for 2 minutes
+        ),
     )
 
 except ImportError:
