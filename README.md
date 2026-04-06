@@ -1,3 +1,15 @@
+---
+title: reddit mod bot
+emoji: 🛡️
+colorFrom: red
+colorTo: orange
+sdk: Docker
+sdk_version: "4.44.0"
+python_version: "3.11"
+app_file: app.py
+pinned: false
+---
+
 # Reddit Mod Bot RL Environment
 
 An OpenEnv RL environment where agents learn to moderate posts on **r/science**.
