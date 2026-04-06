@@ -19,8 +19,10 @@ RUN pip install --no-cache-dir \
     pydantic>=2.0.0 \
     httpx>=0.27.0
 
-WORKDIR /app
+WORKDIR /app/reddit_mod_env
 
+# PYTHONPATH=/app so that 'reddit_mod_env' is importable as a package.
+# app.py adds its parent (/app) to sys.path at runtime for HF compatibility.
 ENV PYTHONPATH=/app
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -28,4 +30,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 EXPOSE 7860
 
-CMD ["uvicorn", "reddit_mod_env.server.app:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
