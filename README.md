@@ -1,8 +1,8 @@
 ---
 title: reddit mod bot
 emoji: 🛡️
-colorFrom: red
-colorTo: orange
+colorFrom: blue
+colorTo: purple
 sdk: docker
 sdk_version: "4.44.0"
 python_version: "3.11"
