@@ -100,3 +100,13 @@ except ImportError:
             "observation": ModObservation.model_json_schema(),
             "state": ModState.model_json_schema(),
         }
+
+
+def main() -> None:
+    """Server entry point — callable by the openenv CLI and the installed script."""
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=7860)
+
+
+if __name__ == "__main__":
+    main()

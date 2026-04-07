@@ -4,3 +4,28 @@ type: space
 runtime: fastapi
 app: app:app
 port: 7860
+description: >
+  RL environment simulating Reddit content moderation for r/science.
+  Agents review posts and apply actions (approve, remove, warn, ban, escalate)
+  across three progressive task levels: spam detection, rule classification,
+  and context-aware judgment.
+tags:
+  - openenv
+  - content-moderation
+  - nlp
+tasks:
+  - id: spam-detection
+    level: 1
+    difficulty: easy
+    description: Classify posts as spam or legitimate (approve/remove only)
+    max_steps: 10
+  - id: rule-classification
+    level: 2
+    difficulty: medium
+    description: Identify rule violations and cite the correct subreddit rule
+    max_steps: 8
+  - id: context-judgment
+    level: 3
+    difficulty: hard
+    description: Apply context-aware judgment using user history and proportional enforcement
+    max_steps: 5

@@ -1,7 +1,9 @@
 """
 Reward calculation functions for each task level.
 
-All functions return a float in [0.0, 1.0].
+Tasks 1 and 2 return rewards in [0.0, 1.0].
+Task 3 returns rewards in [-0.25, 1.0]; the lower bound applies only when
+a perma_ban or temp_ban is applied to a post that should have been approved.
 """
 from __future__ import annotations
 
@@ -19,6 +21,8 @@ def calculate_task1_reward(action: "ModAction", ground_truth: "GroundTruth") -> 
     """
     Task 1 — Spam Detection.
     Binary: 1.0 for correct action, 0.0 for wrong.
+    Spam detection is inherently binary — there is no partial credit for
+    missing a spam post or removing a legitimate one.
     """
     return 1.0 if action.action_type == ground_truth.correct_action else 0.0
 
@@ -65,6 +69,28 @@ def calculate_task2_reward(action: "ModAction", ground_truth: "GroundTruth") -> 
         return 0.3
 
     return 0.1  # Identified something was wrong but chose a bad action
+
+
+def _destructive_action_penalty(action: "ModAction", ground_truth: "GroundTruth") -> float:
+    """
+    Explicit penalty for clearly destructive actions in Task 3.
+
+    Returning -0.25 when an agent permanently or temporarily bans a user
+    whose post should have been approved is a qualitatively worse outcome
+    than simply choosing the wrong enforcement level — it actively harms
+    an innocent community member and warrants a stronger negative signal
+    than the 0.0 floor from the weighted factors alone.
+
+    Penalty applied only when:
+      - correct_action is "approve"  (post is legitimate)
+      - agent chose "perma_ban" or "temp_ban"  (maximally destructive)
+    """
+    if (
+        ground_truth.correct_action == "approve"
+        and action.action_type in ("perma_ban", "temp_ban")
+    ):
+        return -0.25
+    return 0.0
 
 
 def calculate_task3_reward(
@@ -126,4 +152,7 @@ def calculate_task3_reward(
         f4 = 1.0 if diff <= 1 else 0.3
 
     total = 0.40 * f1 + 0.25 * f2 + 0.20 * f3 + 0.15 * f4
-    return round(total, 4)
+
+    # Explicit penalty for banning an innocent user (destructive action)
+    penalty = _destructive_action_penalty(action, ground_truth)
+    return round(total + penalty, 4)
