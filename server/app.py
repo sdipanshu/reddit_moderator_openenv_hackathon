@@ -23,11 +23,47 @@ try:
         ),
     )
 
-    from fastapi.responses import RedirectResponse
+    import uuid as _uuid
+    from typing import Optional as _Opt
+
+    from fastapi import HTTPException, Request, Response
+    from fastapi.responses import HTMLResponse
+    from pydantic import BaseModel as _BaseModel
+
+    from ._playground import PLAYGROUND_HTML
+
+    # ── Playground session store (cookie-keyed) ──────────────────────────────
+    _pg_sessions: dict = {}
+
+    class _PGResetRequest(_BaseModel):
+        task_level: int = 1
+        num_posts: _Opt[int] = None
+        seed: _Opt[int] = None
 
     @app.get("/", include_in_schema=False)
-    def root():
-        return RedirectResponse(url="/docs")
+    def root() -> HTMLResponse:
+        return HTMLResponse(PLAYGROUND_HTML)
+
+    @app.post("/pg/reset", include_in_schema=False)
+    def pg_reset(request: _PGResetRequest, response: Response) -> dict:
+        env = RedditModEnvironment()
+        kwargs: dict = {"task_level": request.task_level}
+        if request.num_posts is not None:
+            kwargs["num_posts"] = request.num_posts
+        obs = env.reset(seed=request.seed, **kwargs)
+        sid = str(_uuid.uuid4())
+        _pg_sessions[sid] = env
+        response.set_cookie("pg_sid", sid, max_age=3600, httponly=True)
+        return obs.model_dump()
+
+    @app.post("/pg/step", include_in_schema=False)
+    def pg_step(action: ModAction, request: Request) -> dict:
+        sid = request.cookies.get("pg_sid")
+        env = _pg_sessions.get(sid) if sid else None
+        if env is None:
+            raise HTTPException(400, "No active session — call /pg/reset first")
+        obs = env.step(action)
+        return obs.model_dump()
 
 except ImportError:
     # ── Fallback: standalone FastAPI server for local dev without openenv-core ──
@@ -65,10 +101,38 @@ except ImportError:
         seed: Optional[int] = None
         episode_id: Optional[str] = None
 
+    from fastapi import Request, Response
+    from fastapi.responses import HTMLResponse
+
+    from ._playground import PLAYGROUND_HTML
+
+    _pg_sessions_fb: dict = {}
+
     @app.get("/", include_in_schema=False)
-    def root():
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/docs")
+    def root() -> HTMLResponse:
+        return HTMLResponse(PLAYGROUND_HTML)
+
+    @app.post("/pg/reset", include_in_schema=False)
+    def pg_reset_fb(request: ResetRequest, response: Response) -> dict:
+        import uuid as _uuid
+        env = RedditModEnvironment()
+        kwargs: Dict[str, Any] = {"task_level": request.task_level}
+        if request.num_posts is not None:
+            kwargs["num_posts"] = request.num_posts
+        obs = env.reset(seed=request.seed, **kwargs)
+        sid = str(_uuid.uuid4())
+        _pg_sessions_fb[sid] = env
+        response.set_cookie("pg_sid", sid, max_age=3600, httponly=True)
+        return obs.model_dump()
+
+    @app.post("/pg/step", include_in_schema=False)
+    def pg_step_fb(action: ModAction, request: Request) -> dict:
+        from fastapi import HTTPException
+        sid = request.cookies.get("pg_sid")
+        env = _pg_sessions_fb.get(sid) if sid else None
+        if env is None:
+            raise HTTPException(400, "No active session — call /pg/reset first")
+        return env.step(action).model_dump()
 
     @app.get("/health")
     def health() -> Dict[str, str]:
