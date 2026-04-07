@@ -11,13 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . /app/reddit_mod_env
 WORKDIR /app/reddit_mod_env
 
-# Install Python dependencies (openenv-core is required per hackathon spec)
-RUN pip install --no-cache-dir \
-    openenv-core>=0.2.2 \
-    fastapi>=0.110.0 \
-    "uvicorn[standard]>=0.29.0" \
-    pydantic>=2.0.0 \
-    httpx>=0.27.0
+# Install Python dependencies from pyproject.toml
+RUN pip install --no-cache-dir .
 
 WORKDIR /app/reddit_mod_env
 

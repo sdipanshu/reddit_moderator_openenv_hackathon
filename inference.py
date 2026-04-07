@@ -103,6 +103,12 @@ def _format_user_prompt(obs: ModObservation, task_level: int, history: List[str]
         + (" [APPROVED CONTRIBUTOR]" if a.is_approved_contributor else "")
     )
 
+    thread_ctx_block = ""
+    if post.thread_context:
+        thread_ctx_block = "\nTHREAD CONTEXT:\n" + "\n".join(
+            f"  {c}" for c in post.thread_context
+        )
+
     history_block = (
         "\nRecent history:\n" + "\n".join(history[-3:])
         if history else ""
@@ -125,6 +131,7 @@ def _format_user_prompt(obs: ModObservation, task_level: int, history: List[str]
 
         RULES:
         {rules_text}
+        {thread_ctx_block}
         {history_block}
         Respond with JSON only.
     """).strip()
@@ -250,7 +257,15 @@ async def _run_task_async(
                 break
 
             action, label, err = _get_model_action(client, obs, task_level, history)
-            result = await env.step(action)
+            try:
+                result = await env.step(action)
+            except Exception as step_exc:
+                msg = str(step_exc).lower()
+                if any(k in msg for k in ("close frame", "websocket", "disconnect", "connection")):
+                    print(f"[DEBUG] WS closed at step {step}, ending episode early: {step_exc}", flush=True)
+                    break
+                raise
+
             obs = getattr(result, "observation", result)
             reward = float(getattr(result, "reward", None) or getattr(obs, "reward", None) or 0.0)
             done = getattr(result, "done", getattr(obs, "done", False))
@@ -263,12 +278,13 @@ async def _run_task_async(
             if done:
                 break
 
-        score = min(max(sum(rewards) / num_posts, 0.0), 1.0)
-        success = score >= SUCCESS_THRESHOLD
-
     except Exception as exc:
         print(f"[DEBUG] Task {task_level} async error: {exc}", flush=True)
     finally:
+        # Score from whatever rewards were collected — partial episodes still count
+        if rewards:
+            score = min(max(sum(rewards) / num_posts, 0.0), 1.0)
+            success = score >= SUCCESS_THRESHOLD
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 

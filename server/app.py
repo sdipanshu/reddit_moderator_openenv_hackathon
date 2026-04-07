@@ -19,13 +19,18 @@ try:
         observation_cls=ModObservation,
         concurrency_config=ConcurrencyConfig(
             max_concurrent_envs=20,
-            session_timeout=120.0,  # auto-clean sessions idle for 2 minutes
+            session_timeout=600.0,  # 10 min — accommodates slow LLM calls between steps
         ),
     )
 
+    from fastapi.responses import RedirectResponse
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return RedirectResponse(url="/docs")
+
 except ImportError:
     # ── Fallback: standalone FastAPI server for local dev without openenv-core ──
-    import uuid
     from typing import Any, Dict, Optional
 
     from fastapi import FastAPI
@@ -59,6 +64,11 @@ except ImportError:
         num_posts: Optional[int] = None
         seed: Optional[int] = None
         episode_id: Optional[str] = None
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/docs")
 
     @app.get("/health")
     def health() -> Dict[str, str]:

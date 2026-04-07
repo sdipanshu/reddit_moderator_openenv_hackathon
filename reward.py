@@ -1,9 +1,12 @@
 """
 Reward calculation functions for each task level.
 
-Tasks 1 and 2 return rewards in [0.0, 1.0].
-Task 3 returns rewards in [-0.25, 1.0]; the lower bound applies only when
-a perma_ban or temp_ban is applied to a post that should have been approved.
+All tasks return rewards in [0.0, 1.0].
+
+Task 3 uses a suppression factor (0.15×) rather than a hard floor when a
+destructive action (perma_ban / temp_ban) is applied to a post that should
+have been approved.  This preserves relative signal within the destructive
+case while keeping its reward far below any proportionate wrong action.
 """
 from __future__ import annotations
 
@@ -36,6 +39,7 @@ def calculate_task2_reward(action: "ModAction", ground_truth: "GroundTruth") -> 
       0.6  — correct action, wrong/missing rule (when a rule citation was needed)
       0.5  — acceptable action AND correct rule
       0.3  — acceptable action, wrong/missing rule
+      0.1  — identified a violation but chose a bad action
       0.0  — missed violation (approved when should act) or false positive (acted when should approve)
     """
     correct_action = action.action_type == ground_truth.correct_action
@@ -52,45 +56,20 @@ def calculate_task2_reward(action: "ModAction", ground_truth: "GroundTruth") -> 
         ground_truth.correct_rule is not None
         and action.rule_cited == ground_truth.correct_rule
     )
-    cited_a_rule = action.rule_cited is not None
 
     if action.action_type == "approve":
         return 0.0  # Missed a real violation
 
     if correct_action and correct_rule:
         return 1.0
-    if correct_action and cited_a_rule:
-        return 0.6   # Right action, wrong rule
     if correct_action:
-        return 0.6   # Right action, forgot to cite rule
+        return 0.6   # Right action but wrong or missing rule citation
     if acceptable_action and correct_rule:
         return 0.5
     if acceptable_action:
         return 0.3
 
     return 0.1  # Identified something was wrong but chose a bad action
-
-
-def _destructive_action_penalty(action: "ModAction", ground_truth: "GroundTruth") -> float:
-    """
-    Explicit penalty for clearly destructive actions in Task 3.
-
-    Returning -0.25 when an agent permanently or temporarily bans a user
-    whose post should have been approved is a qualitatively worse outcome
-    than simply choosing the wrong enforcement level — it actively harms
-    an innocent community member and warrants a stronger negative signal
-    than the 0.0 floor from the weighted factors alone.
-
-    Penalty applied only when:
-      - correct_action is "approve"  (post is legitimate)
-      - agent chose "perma_ban" or "temp_ban"  (maximally destructive)
-    """
-    if (
-        ground_truth.correct_action == "approve"
-        and action.action_type in ("perma_ban", "temp_ban")
-    ):
-        return -0.25
-    return 0.0
 
 
 def calculate_task3_reward(
@@ -106,7 +85,31 @@ def calculate_task3_reward(
       - Proportionality      (25%)
       - Rule citation        (20%)
       - Escalation judgment  (15%)
+
+    Destructive actions (perma_ban or temp_ban) on a post whose correct action
+    is 'approve' are suppressed to 15% of their computed total.  This keeps
+    them far below any proportionate wrong action (~0.47 for 'warn' on an
+    approve post vs. a max of ~0.037 in the destructive case) while preserving
+    relative signal within the destructive category.
+
+    All rewards are in [0.0, 1.0].
     """
+    # ── Destructive-action suppression ───────────────────────────────────────
+    # Banning a user whose post should have been approved is qualitatively
+    # worse than any other wrong action.  Rather than zeroing out the reward
+    # entirely, we compute the four weighted factors as normal and then
+    # suppress the result to 15% of what they total.  This preserves relative
+    # signal within the destructive case (e.g. at least citing no rule is
+    # better than citing a spurious one) while keeping the reward far below
+    # what any proportionate wrong action would receive (~0.47 for "warn" on
+    # an approve post vs. a maximum of ~0.037 here).  All values remain in
+    # [0.0, 1.0].
+    _DESTRUCTIVE_SUPPRESSION = 0.15
+    _is_destructive = (
+        ground_truth.correct_action == "approve"
+        and action.action_type in ("perma_ban", "temp_ban")
+    )
+
     # ── Factor 1: Action correctness (0.40) ──────────────────────────────────
     if action.action_type == ground_truth.correct_action:
         f1 = 1.0
@@ -152,7 +155,6 @@ def calculate_task3_reward(
         f4 = 1.0 if diff <= 1 else 0.3
 
     total = 0.40 * f1 + 0.25 * f2 + 0.20 * f3 + 0.15 * f4
-
-    # Explicit penalty for banning an innocent user (destructive action)
-    penalty = _destructive_action_penalty(action, ground_truth)
-    return round(total + penalty, 4)
+    if _is_destructive:
+        total *= _DESTRUCTIVE_SUPPRESSION
+    return round(total, 4)

@@ -127,6 +127,10 @@ class TestStep:
         assert obs.action_was_correct is False
         assert "Invalid action" in obs.feedback
 
+    def test_step_before_reset_raises(self, env: RedditModEnvironment) -> None:
+        with pytest.raises(RuntimeError, match="reset\\(\\)"):
+            env.step(ModAction(action_type="approve"))
+
     def test_invalid_action_does_not_advance_post(
         self, env: RedditModEnvironment
     ) -> None:
@@ -300,15 +304,17 @@ class TestRewardSignal:
             f"Task 3 should produce fractional rewards from weighted factors; got {rewards}"
         )
 
-    def test_task3_destructive_action_penalty(
+    def test_task3_destructive_action_suppression(
         self, env: RedditModEnvironment
     ) -> None:
         """
-        perma_ban and temp_ban on a legitimate post must yield a negative reward.
+        perma_ban and temp_ban on a legitimate post must be suppressed to 15%
+        of their computed total — far below what any proportionate wrong action
+        would score (~0.47 for 'warn' on an approve post).
 
-        We test the reward function directly because the episode loop has no way
-        to know which post is an 'approve' post before submitting the action —
-        obs.correct_action_type is only revealed *after* stepping.
+        We verify:
+          - reward is in [0.0, 0.1] (well below non-destructive wrong actions)
+          - reward is strictly less than what 'warn' would score on the same post
         """
         from reddit_mod_env.content_generator import ContentGenerator
         from reddit_mod_env.reward import calculate_task3_reward
@@ -322,25 +328,29 @@ class TestRewardSignal:
             pytest.skip("No approve scenario in Task 3 pool (seed=0)")
 
         post, gt = approve_cases[0]
+        r_warn = calculate_task3_reward(ModAction(action_type="warn"), gt, post)
 
-        # perma_ban on a legitimate post → negative reward
         r_perma = calculate_task3_reward(ModAction(action_type="perma_ban"), gt, post)
-        assert r_perma < 0, f"perma_ban on approve post must be negative; got {r_perma}"
-        assert r_perma >= -0.25, f"Penalty floor is -0.25; got {r_perma}"
+        assert 0.0 <= r_perma <= 0.1, f"perma_ban suppressed reward out of range; got {r_perma}"
+        assert r_perma < r_warn, (
+            f"perma_ban ({r_perma}) should score less than warn ({r_warn}) on an approve post"
+        )
 
-        # temp_ban also triggers the penalty
         r_temp = calculate_task3_reward(
             ModAction(action_type="temp_ban", ban_duration_days=7), gt, post
         )
-        assert r_temp < 0, f"temp_ban on approve post must be negative; got {r_temp}"
-        assert r_temp >= -0.25, f"Penalty floor is -0.25; got {r_temp}"
+        assert 0.0 <= r_temp <= 0.1, f"temp_ban suppressed reward out of range; got {r_temp}"
+        assert r_temp < r_warn, (
+            f"temp_ban ({r_temp}) should score less than warn ({r_warn}) on an approve post"
+        )
 
-    def test_task3_penalty_scoped_to_ban_actions(
+    def test_task3_suppression_scoped_to_ban_actions(
         self, env: RedditModEnvironment
     ) -> None:
         """
         warn and remove on a legitimate post are wrong but not destructive —
-        they must not trigger the negative penalty (floor is 0.0, not below).
+        they receive the full weighted score (not suppressed).
+        Their reward must be higher than the suppressed perma_ban/temp_ban score.
         """
         from reddit_mod_env.content_generator import ContentGenerator
         from reddit_mod_env.reward import calculate_task3_reward
@@ -354,12 +364,14 @@ class TestRewardSignal:
             pytest.skip("No approve scenario in Task 3 pool (seed=0)")
 
         post, gt = approve_cases[0]
+        r_perma = calculate_task3_reward(ModAction(action_type="perma_ban"), gt, post)
 
         for action_type in ("warn", "remove"):
             reward = calculate_task3_reward(ModAction(action_type=action_type), gt, post)
-            assert reward >= 0.0, (
-                f"{action_type} on approve post should be ≥ 0.0 (no destructive penalty); "
-                f"got {reward}"
+            assert reward >= 0.0, f"{action_type} on approve post must be ≥ 0.0; got {reward}"
+            assert reward > r_perma, (
+                f"{action_type} ({reward}) should score higher than perma_ban "
+                f"({r_perma}) — suppression only applies to destructive actions"
             )
 
     def test_reward_bounded(self, env: RedditModEnvironment) -> None:
@@ -386,11 +398,11 @@ class TestRewardSignal:
                         f"Task {task_level} reward {obs.reward} out of [0.0, 1.0]"
                     )
 
-        # Task 3: reward may be negative (penalty for ban on innocent user)
+        # Task 3: reward is in [0.0, 1.0] — destructive actions get a 0.0 floor
         obs = env.reset(seed=7, task_level=3)
         while not obs.done:
             obs = env.step(ModAction(action_type="perma_ban"))
             if obs.reward is not None:
-                assert -0.25 <= obs.reward <= 1.0, (
-                    f"Task 3 reward {obs.reward} out of bounds [-0.25, 1.0]"
+                assert 0.0 <= obs.reward <= 1.0, (
+                    f"Task 3 reward {obs.reward} out of bounds [0.0, 1.0]"
                 )

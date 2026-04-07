@@ -128,12 +128,12 @@ Spam detection is a binary classification; no partial credit applies.
 - `0.1` wrong action but identified a violation
 - `0.0` missed violation or false positive
 
-**Task 3** — Weighted multi-factor `[-0.25, 1.0]`:
+**Task 3** — Weighted multi-factor `[0.0, 1.0]`:
 - Action correctness × 0.40
 - Proportionality × 0.25
 - Rule citation × 0.20
 - Escalation judgment × 0.15
-- **Penalty: −0.25** when `perma_ban` or `temp_ban` is applied to a post whose correct action is `approve` (destructive action against an innocent user)
+- **Destructive suppression: 15×** — when `perma_ban` or `temp_ban` is applied to a post whose correct action is `approve`, the computed total is multiplied by 0.15. Relative signal within the destructive case is preserved (e.g. correct rule citation still matters), but the maximum possible reward is ~0.037 — far below the ~0.47 a softer wrong action like `warn` would receive
 
 ## Validation
 
@@ -190,10 +190,10 @@ HF_TOKEN=<your-token> python inference.py
 LOCAL_IMAGE_NAME=reddit-mod-env HF_TOKEN=<your-token> python inference.py
 ```
 
-| Task | Description | Score |
-|------|-------------|-------|
-| 1 — spam-detection | Spam vs legitimate (10 posts) | 1.00 |
-| 2 — rule-classification | Rule violation + citation (8 posts) | 0.76 |
-| 3 — context-judgment | Context-aware judgment (5 posts) | 0.56 |
+| Task | Description | Steps | Score |
+|------|-------------|-------|-------|
+| 1 — spam-detection | Spam vs legitimate | 10/10 | **1.00** |
+| 2 — rule-classification | Rule violation + citation | 8/8 | **0.89** |
+| 3 — context-judgment | Context-aware judgment | 5/5 | **0.62** |
 
 > Score = `sum(per-step rewards) / num_posts`, normalized to [0, 1]. Model: `Qwen/Qwen2.5-72B-Instruct`, seed=42.

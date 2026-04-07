@@ -123,9 +123,10 @@ class RedditModEnvironment(Environment):
         task_level = self._state.task_level
         allowed = TASK_ALLOWED_ACTIONS[task_level]
 
-        # ── Auto-reset if called before reset() (HTTP stateless single-step) ───
         if not self._posts:
-            self.reset(task_level=1)
+            raise RuntimeError(
+                "step() called before reset(). Call reset() to start an episode first."
+            )
 
         # ── Validate action for current task level ────────────────────────────
         if action.action_type not in allowed:
