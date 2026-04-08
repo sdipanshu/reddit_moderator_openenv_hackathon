@@ -164,7 +164,7 @@ def get_action(client: OpenAI, obs, task_level: int) -> tuple[ModAction, str, Op
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.2,
+            temperature=0.0,
             max_tokens=200,
         )
         raw = (completion.choices[0].message.content or "").strip()

@@ -196,4 +196,4 @@ API_KEY=<your-token> API_BASE_URL=https://router.huggingface.co/v1 MODEL_NAME=Qw
 | 2 — rule-classification | Rule violation + citation | 8/8 | **0.89** |
 | 3 — context-judgment | Context-aware judgment | 5/5 | **0.62** |
 
-> Episode score = `sum(per-step rewards) / num_posts`, clamped to (0.001, 0.999). Per-step rewards are in [0.0, 1.0] and unaffected by clamping. Model: `Qwen/Qwen2.5-72B-Instruct`, seed=42.
+> Episode score = `sum(per-step rewards) / num_posts`, clamped to (0.001, 0.999). Per-step rewards are in [0.0, 1.0] and unaffected by clamping. Model: `Qwen/Qwen2.5-72B-Instruct`, temperature=0.0, seed=42.
