@@ -1,49 +1,34 @@
+#!/usr/bin/env python3
 """
 Inference Script — Reddit Mod Bot RL Environment
 =================================================
-Environment variables:
-    LOCAL_IMAGE_NAME  Docker image name (triggers async openenv-core path).
-    HF_TOKEN          Hugging Face / API key (alias: OPENAI_API_KEY, API_KEY).
-    API_BASE_URL      LLM endpoint (default: HF inference router).
-    MODEL_NAME        Model identifier (default: Qwen/Qwen2.5-72B-Instruct).
+Environment variables (injected by validator):
+    API_KEY       API key for the LLM              (required)
+    API_BASE_URL  LLM endpoint                     (default: HF router)
+    MODEL_NAME    Model identifier                  (default: Qwen2.5-72B)
 
-Runs all three task levels and emits [START]/[STEP]/[END] lines per task.
+Runs all 3 tasks and emits [START]/[STEP]/[END] per task.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import sys
 import textwrap
-from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
-# Ensure the parent of this file is on sys.path so reddit_mod_env is importable
-# whether the package is installed or not.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from openai import OpenAI
 
-from openai import (
-    OpenAI,
-    APIStatusError,
-    APIConnectionError,
-    APITimeoutError,
-    AuthenticationError,
-    BadRequestError,
-)
-
-from reddit_mod_env.client import RedditModEnv
-from reddit_mod_env.models import ModAction, ModObservation
+from reddit_mod_env.server.reddit_mod_environment import RedditModEnvironment
+from reddit_mod_env.models import ModAction
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration — read from env vars exactly as the validator injects them
 # ---------------------------------------------------------------------------
 
-IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")
-API_KEY = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+API_KEY = os.environ.get("API_KEY")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.environ.get("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 
 BENCHMARK = "reddit_mod_env"
 SEED = 42
@@ -87,7 +72,7 @@ SYSTEM_PROMPT = textwrap.dedent("""
 """).strip()
 
 
-def _format_user_prompt(obs: ModObservation, task_level: int, history: List[str]) -> str:
+def _format_prompt(obs, task_level: int) -> str:
     post = obs.current_post
     if post is None:
         return "No post to review."
@@ -110,16 +95,9 @@ def _format_user_prompt(obs: ModObservation, task_level: int, history: List[str]
         + (" [APPROVED CONTRIBUTOR]" if a.is_approved_contributor else "")
     )
 
-    thread_ctx_block = ""
+    thread_block = ""
     if post.thread_context:
-        thread_ctx_block = "\nTHREAD CONTEXT:\n" + "\n".join(
-            f"  {c}" for c in post.thread_context
-        )
-
-    history_block = (
-        "\nRecent history:\n" + "\n".join(history[-3:])
-        if history else ""
-    )
+        thread_block = "\nTHREAD CONTEXT:\n" + "\n".join(f"  {c}" for c in post.thread_context)
 
     return textwrap.dedent(f"""
         Task {task_level} | Allowed actions: {", ".join(allowed)}
@@ -138,14 +116,13 @@ def _format_user_prompt(obs: ModObservation, task_level: int, history: List[str]
 
         RULES:
         {rules_text}
-        {thread_ctx_block}
-        {history_block}
+        {thread_block}
         Respond with JSON only.
     """).strip()
 
 
 # ---------------------------------------------------------------------------
-# Logging helpers (exact format required)
+# Stdout logging helpers — exact format required by validator
 # ---------------------------------------------------------------------------
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -153,7 +130,7 @@ def log_start(task: str, env: str, model: str) -> None:
 
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    error_val = error or "null"
+    error_val = error if error else "null"
     print(
         f"[STEP] step={step} action={action} reward={reward:.2f}"
         f" done={str(done).lower()} error={error_val}",
@@ -171,71 +148,45 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 
 
 # ---------------------------------------------------------------------------
-# LLM interaction
+# LLM call
 # ---------------------------------------------------------------------------
 
-async def _get_model_action(
-    client: OpenAI,
-    obs: ModObservation,
-    task_level: int,
-    history: List[str],
-) -> Tuple[ModAction, str, Optional[str]]:
-    """Call the LLM and parse its response into a ModAction. Never raises.
-
-    Retries up to 3 times on rate-limit / server errors (429, 5xx) with
-    exponential backoff: 5s, 10s, 20s.
-    """
-    user_prompt = _format_user_prompt(obs, task_level, history)
+def get_action(client: OpenAI, obs, task_level: int) -> tuple[ModAction, str, Optional[str]]:
+    """Call the LLM, parse its JSON response into a ModAction."""
+    user_prompt = _format_prompt(obs, task_level)
     error: Optional[str] = None
     data: dict = {}
 
-    _RETRY_DELAYS = [5, 10, 20]
-    for attempt, delay in enumerate([0] + _RETRY_DELAYS):
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            completion = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.2,
-                max_tokens=200,
-                stream=False,
-            )
-            raw = (completion.choices[0].message.content or "").strip()
-            data = json.loads(raw)
-            error = None
-            break  # success
-        except json.JSONDecodeError as exc:
-            error = f"json_parse_error:{exc}"
-            break  # bad JSON from model — no point retrying
-        except Exception as exc:
-            is_retryable = (
-                isinstance(exc, (APIConnectionError, APITimeoutError))
-                or (isinstance(exc, APIStatusError)
-                    and not isinstance(exc, (AuthenticationError, BadRequestError)))
-            )
-            if is_retryable and attempt < len(_RETRY_DELAYS):
-                print(f"[DEBUG] LLM rate-limited (attempt {attempt + 1}), retrying in {_RETRY_DELAYS[attempt]}s", flush=True)
-                continue
-            error = f"llm_error:{type(exc).__name__}"
-            break
+    try:
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=200,
+        )
+        raw = (completion.choices[0].message.content or "").strip()
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        error = f"json_parse_error:{exc}"
+    except Exception as exc:
+        error = f"llm_error:{type(exc).__name__}:{exc}"
 
     action_type: str = data.get("action_type", "approve")
     allowed = _ALLOWED_ACTIONS.get(task_level, ["approve", "remove"])
     if action_type not in allowed:
         action_type = "approve"
-        error = error or f"invalid_action_coerced_to_approve"
+        error = error or "invalid_action_coerced_to_approve"
 
     rule_raw = data.get("rule_cited")
     rule_cited: Optional[int] = int(rule_raw) if rule_raw is not None else None
 
-    ban_days_raw = data.get("ban_duration_days")
-    ban_duration: Optional[int] = int(ban_days_raw) if ban_days_raw is not None else None
+    ban_raw = data.get("ban_duration_days")
+    ban_duration: Optional[int] = int(ban_raw) if ban_raw is not None else None
     if action_type == "temp_ban" and ban_duration is None:
-        ban_duration = 7  # reasonable default
+        ban_duration = 7
 
     action = ModAction(
         action_type=action_type,
@@ -254,63 +205,40 @@ async def _get_model_action(
 
 
 # ---------------------------------------------------------------------------
-# Episode runners
+# Task runner
 # ---------------------------------------------------------------------------
 
-async def _run_task_async(
-    env,
-    client: OpenAI,
-    task_level: int,
-    task_name: str,
-    num_posts: int,
-) -> None:
-    """Run one task episode via async openenv-core interface."""
+def run_task(client: OpenAI, task_level: int, task_name: str, num_posts: int) -> None:
     rewards: List[float] = []
     steps_taken = 0
     score = 0.0
     success = False
-    history: List[str] = []
 
     log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = await env.reset(task_level=task_level, seed=SEED)
-        obs: ModObservation = getattr(result, "observation", result)
+        env = RedditModEnvironment()
+        obs = env.reset(seed=SEED, task_level=task_level)
 
         for step in range(1, num_posts + 1):
-            done = getattr(result, "done", getattr(obs, "done", False))
-            if done:
+            if obs.done:
                 break
 
-            action, label, err = await _get_model_action(client, obs, task_level, history)
-            try:
-                result = await env.step(action)
-            except Exception as step_exc:
-                msg = str(step_exc).lower()
-                if any(k in msg for k in ("close frame", "websocket", "disconnect", "connection")):
-                    print(f"[DEBUG] WS closed at step {step}, ending episode early: {step_exc}", flush=True)
-                    break
-                raise
+            action, label, err = get_action(client, obs, task_level)
+            obs = env.step(action)
 
-            obs = getattr(result, "observation", result)
-            _r = getattr(result, "reward", None)
-            if _r is None:
-                _r = getattr(obs, "reward", None)
-            reward = float(_r) if _r is not None else 0.0
-            done = getattr(result, "done", getattr(obs, "done", False))
-
+            reward = float(obs.reward) if obs.reward is not None else 0.0
             rewards.append(reward)
             steps_taken = step
-            log_step(step=step, action=label, reward=reward, done=done, error=err)
-            history.append(f"Step {step}: {label} -> reward={reward:.2f} correct={obs.action_was_correct}")
+            log_step(step=step, action=label, reward=reward, done=obs.done, error=err)
 
-            if done:
+            if obs.done:
                 break
 
     except Exception as exc:
-        print(f"[DEBUG] Task {task_level} async error: {exc}", flush=True)
+        print(f"[DEBUG] Task {task_level} error: {exc}", flush=True)
+
     finally:
-        # Score from whatever rewards were collected — partial episodes still count
         if rewards:
             score = min(max(sum(rewards) / num_posts, 0.0), 1.0)
             success = score >= SUCCESS_THRESHOLD
@@ -321,72 +249,18 @@ async def _run_task_async(
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _build_client() -> OpenAI:
-    """Build the OpenAI client using validator-injected env vars (API_KEY, API_BASE_URL)."""
-    # Read directly from env at call time — exactly as the validator requires.
-    key = (
-        os.environ.get("API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("HF_TOKEN")
-    )
-    base_url = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-    if not key:
-        raise RuntimeError(
-            "No API key found. Set API_KEY, OPENAI_API_KEY, or HF_TOKEN."
+def main() -> None:
+    if not API_KEY:
+        raise SystemExit(
+            "API_KEY environment variable must be set.\n"
+            "  export API_KEY=your_token_here"
         )
-    return OpenAI(base_url=base_url, api_key=key)
 
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-async def main() -> None:
-    # Guard client construction — a missing API key must not crash the process;
-    # the validator expects [START]/[STEP]/[END] on stdout regardless.
-    try:
-        client = _build_client()
-    except Exception as exc:
-        print(f"[DEBUG] Client init failed: {exc}", flush=True)
-        for _, task_name, _ in TASKS:
-            log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
-            log_step(step=1, action="approve", reward=0.0, done=True,
-                     error=f"client_init_error:{type(exc).__name__}")
-            log_end(success=False, steps=1, score=0.0, rewards=[0.0])
-        return
-
-    if IMAGE_NAME:
-        # Docker path: one container, but reconnect for each task so every
-        # task gets a fresh server-side session (clean environment state).
-        try:
-            env = await RedditModEnv.from_docker_image(IMAGE_NAME)
-        except Exception as exc:
-            print(f"[DEBUG] Docker env init failed: {exc}", flush=True)
-            for _, task_name, _ in TASKS:
-                log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
-                log_step(step=1, action="approve", reward=0.0, done=True,
-                         error=f"env_init_error:{type(exc).__name__}")
-                log_end(success=False, steps=1, score=0.0, rewards=[0.0])
-            return
-        try:
-            for task_level, task_name, num_posts in TASKS:
-                await _run_task_async(env, client, task_level, task_name, num_posts)
-                # Reconnect after each task to get a fresh session on the server
-                try:
-                    await env.disconnect()
-                    await env.connect()
-                except Exception as exc:
-                    print(f"[DEBUG] reconnect error after task {task_level}: {exc}", flush=True)
-        finally:
-            try:
-                await env.close()
-            except Exception as exc:
-                print(f"[DEBUG] env.close() error: {exc}", flush=True)
-    else:
-        # HTTP path: fresh WebSocket connection per task → fresh server session
-        # and clean environment state with no cross-task state contamination.
-        server_url = os.getenv("ENV_URL", "http://localhost:7860")
-        print(f"[DEBUG] No IMAGE_NAME set; connecting to {server_url}", flush=True)
-        for task_level, task_name, num_posts in TASKS:
-            async with RedditModEnv(server_url) as env:
-                await _run_task_async(env, client, task_level, task_name, num_posts)
+    for task_level, task_name, num_posts in TASKS:
+        run_task(client, task_level, task_name, num_posts)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
