@@ -240,7 +240,7 @@ def run_task(client: OpenAI, task_level: int, task_name: str, num_posts: int) ->
 
     finally:
         if rewards:
-            score = min(max(sum(rewards) / num_posts, 0.0), 1.0)
+            score = max(0.001, min(0.999, sum(rewards) / num_posts))
             success = score >= SUCCESS_THRESHOLD
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 

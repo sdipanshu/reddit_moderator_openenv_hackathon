@@ -183,17 +183,17 @@ with RedditModEnv("http://localhost:7860") as env:
 Runs `Qwen/Qwen2.5-72B-Instruct` via the Hugging Face inference router against all 3 tasks (seed=42).
 
 ```bash
-# Against a running local server
-HF_TOKEN=<your-token> python inference.py
+# With a local server running on port 7860
+API_KEY=<your-token> python inference.py
 
-# Against a Docker image (requires openenv-core)
-LOCAL_IMAGE_NAME=reddit-mod-env HF_TOKEN=<your-token> python inference.py
+# Override endpoint or model
+API_KEY=<your-token> API_BASE_URL=https://router.huggingface.co/v1 MODEL_NAME=Qwen/Qwen2.5-72B-Instruct python inference.py
 ```
 
 | Task | Description | Steps | Score |
 |------|-------------|-------|-------|
-| 1 — spam-detection | Spam vs legitimate | 10/10 | **1.00** |
+| 1 — spam-detection | Spam vs legitimate | 10/10 | **0.999** |
 | 2 — rule-classification | Rule violation + citation | 8/8 | **0.89** |
 | 3 — context-judgment | Context-aware judgment | 5/5 | **0.62** |
 
-> Score = `sum(per-step rewards) / num_posts`, normalized to [0, 1]. Model: `Qwen/Qwen2.5-72B-Instruct`, seed=42.
+> Episode score = `sum(per-step rewards) / num_posts`, clamped to (0.001, 0.999). Per-step rewards are in [0.0, 1.0] and unaffected by clamping. Model: `Qwen/Qwen2.5-72B-Instruct`, seed=42.
