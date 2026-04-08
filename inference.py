@@ -14,8 +14,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import textwrap
+from pathlib import Path
 from typing import List, Optional
+
+# Make `reddit_mod_env` importable when running as `python inference.py` from
+# inside the repo directory. In Docker (PYTHONPATH=/app) this is a no-op since
+# the parent is already on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from openai import OpenAI
 
@@ -26,9 +33,11 @@ from reddit_mod_env.models import ModAction
 # Configuration — read from env vars exactly as the validator injects them
 # ---------------------------------------------------------------------------
 
-API_KEY = os.environ.get("API_KEY")
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
+HF_TOKEN = os.getenv("HF_TOKEN")
+API_KEY = os.getenv("API_KEY") or HF_TOKEN
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")  # optional: used with from_docker_image()
 
 BENCHMARK = "reddit_mod_env"
 SEED = 42
