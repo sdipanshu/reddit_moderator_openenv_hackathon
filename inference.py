@@ -322,13 +322,19 @@ async def _run_task_async(
 # ---------------------------------------------------------------------------
 
 def _build_client() -> OpenAI:
-    """Build the OpenAI client. Raises RuntimeError with a clear message if unconfigured."""
-    key = API_KEY
+    """Build the OpenAI client using validator-injected env vars (API_KEY, API_BASE_URL)."""
+    # Read directly from env at call time — exactly as the validator requires.
+    key = (
+        os.environ.get("API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("HF_TOKEN")
+    )
+    base_url = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
     if not key:
         raise RuntimeError(
-            "No API key found. Set HF_TOKEN, OPENAI_API_KEY, or API_KEY."
+            "No API key found. Set API_KEY, OPENAI_API_KEY, or HF_TOKEN."
         )
-    return OpenAI(base_url=API_BASE_URL, api_key=key)
+    return OpenAI(base_url=base_url, api_key=key)
 
 
 async def main() -> None:
