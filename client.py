@@ -94,6 +94,12 @@ except ImportError:
         def __exit__(self, *_: Any) -> None:
             self.close()
 
+        async def __aenter__(self) -> "RedditModEnv":
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            self.close()
+
 
 # ---------------------------------------------------------------------------
 # Shared deserialization helper

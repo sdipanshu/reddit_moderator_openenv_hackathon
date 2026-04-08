@@ -24,7 +24,14 @@ from typing import List, Optional, Tuple
 # whether the package is installed or not.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from openai import OpenAI
+from openai import (
+    OpenAI,
+    APIStatusError,
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+)
 
 from reddit_mod_env.client import RedditModEnv
 from reddit_mod_env.models import ModAction, ModObservation
@@ -167,35 +174,54 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
 # LLM interaction
 # ---------------------------------------------------------------------------
 
-def _get_model_action(
+async def _get_model_action(
     client: OpenAI,
     obs: ModObservation,
     task_level: int,
     history: List[str],
 ) -> Tuple[ModAction, str, Optional[str]]:
-    """Call the LLM and parse its response into a ModAction. Never raises."""
+    """Call the LLM and parse its response into a ModAction. Never raises.
+
+    Retries up to 3 times on rate-limit / server errors (429, 5xx) with
+    exponential backoff: 5s, 10s, 20s.
+    """
     user_prompt = _format_user_prompt(obs, task_level, history)
     error: Optional[str] = None
+    data: dict = {}
 
-    try:
-        completion = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=200,
-            stream=False,
-        )
-        raw = (completion.choices[0].message.content or "").strip()
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        error = f"json_parse_error:{exc}"
-        data = {}
-    except Exception as exc:
-        error = f"llm_error:{type(exc).__name__}"
-        data = {}
+    _RETRY_DELAYS = [5, 10, 20]
+    for attempt, delay in enumerate([0] + _RETRY_DELAYS):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=200,
+                stream=False,
+            )
+            raw = (completion.choices[0].message.content or "").strip()
+            data = json.loads(raw)
+            error = None
+            break  # success
+        except json.JSONDecodeError as exc:
+            error = f"json_parse_error:{exc}"
+            break  # bad JSON from model — no point retrying
+        except Exception as exc:
+            is_retryable = (
+                isinstance(exc, (APIConnectionError, APITimeoutError))
+                or (isinstance(exc, APIStatusError)
+                    and not isinstance(exc, (AuthenticationError, BadRequestError)))
+            )
+            if is_retryable and attempt < len(_RETRY_DELAYS):
+                print(f"[DEBUG] LLM rate-limited (attempt {attempt + 1}), retrying in {_RETRY_DELAYS[attempt]}s", flush=True)
+                continue
+            error = f"llm_error:{type(exc).__name__}"
+            break
 
     action_type: str = data.get("action_type", "approve")
     allowed = _ALLOWED_ACTIONS.get(task_level, ["approve", "remove"])
@@ -256,7 +282,7 @@ async def _run_task_async(
             if done:
                 break
 
-            action, label, err = _get_model_action(client, obs, task_level, history)
+            action, label, err = await _get_model_action(client, obs, task_level, history)
             try:
                 result = await env.step(action)
             except Exception as step_exc:
@@ -267,7 +293,10 @@ async def _run_task_async(
                 raise
 
             obs = getattr(result, "observation", result)
-            reward = float(getattr(result, "reward", None) or getattr(obs, "reward", None) or 0.0)
+            _r = getattr(result, "reward", None)
+            if _r is None:
+                _r = getattr(obs, "reward", None)
+            reward = float(_r) if _r is not None else 0.0
             done = getattr(result, "done", getattr(obs, "done", False))
 
             rewards.append(reward)
@@ -292,19 +321,52 @@ async def _run_task_async(
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _build_client() -> OpenAI:
+    """Build the OpenAI client. Raises RuntimeError with a clear message if unconfigured."""
+    key = API_KEY
+    if not key:
+        raise RuntimeError(
+            "No API key found. Set HF_TOKEN, OPENAI_API_KEY, or API_KEY."
+        )
+    return OpenAI(base_url=API_BASE_URL, api_key=key)
+
+
 async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # Guard client construction — a missing API key must not crash the process;
+    # the validator expects [START]/[STEP]/[END] on stdout regardless.
+    try:
+        client = _build_client()
+    except Exception as exc:
+        print(f"[DEBUG] Client init failed: {exc}", flush=True)
+        for _, task_name, _ in TASKS:
+            log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
+            log_step(step=1, action="approve", reward=0.0, done=True,
+                     error=f"client_init_error:{type(exc).__name__}")
+            log_end(success=False, steps=1, score=0.0, rewards=[0.0])
+        return
 
     if IMAGE_NAME:
         # Docker path: one container, but reconnect for each task so every
         # task gets a fresh server-side session (clean environment state).
-        env = await RedditModEnv.from_docker_image(IMAGE_NAME)
+        try:
+            env = await RedditModEnv.from_docker_image(IMAGE_NAME)
+        except Exception as exc:
+            print(f"[DEBUG] Docker env init failed: {exc}", flush=True)
+            for _, task_name, _ in TASKS:
+                log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
+                log_step(step=1, action="approve", reward=0.0, done=True,
+                         error=f"env_init_error:{type(exc).__name__}")
+                log_end(success=False, steps=1, score=0.0, rewards=[0.0])
+            return
         try:
             for task_level, task_name, num_posts in TASKS:
                 await _run_task_async(env, client, task_level, task_name, num_posts)
                 # Reconnect after each task to get a fresh session on the server
-                await env.disconnect()
-                await env.connect()
+                try:
+                    await env.disconnect()
+                    await env.connect()
+                except Exception as exc:
+                    print(f"[DEBUG] reconnect error after task {task_level}: {exc}", flush=True)
         finally:
             try:
                 await env.close()
