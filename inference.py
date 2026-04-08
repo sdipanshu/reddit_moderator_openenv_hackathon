@@ -142,7 +142,7 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
         f"[END] success={str(success).lower()} steps={steps}"
-        f" score={score:.2f} rewards={rewards_str}",
+        f" score={score:.3f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -239,9 +239,8 @@ def run_task(client: OpenAI, task_level: int, task_name: str, num_posts: int) ->
         print(f"[DEBUG] Task {task_level} error: {exc}", flush=True)
 
     finally:
-        if rewards:
-            score = max(0.001, min(0.999, sum(rewards) / num_posts))
-            success = score >= SUCCESS_THRESHOLD
+        score = max(0.001, min(0.999, sum(rewards) / num_posts)) if rewards else 0.001
+        success = score >= SUCCESS_THRESHOLD
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
