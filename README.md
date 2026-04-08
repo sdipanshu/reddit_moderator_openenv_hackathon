@@ -190,8 +190,8 @@ API_KEY=<your-token> API_BASE_URL=https://router.huggingface.co/v1 MODEL_NAME=Qw
 
 | Task | Description | Steps | Score |
 |------|-------------|-------|-------|
-| 1 — spam-detection | Spam vs legitimate | 10/10 | **0.999** |
-| 2 — rule-classification | Rule violation + citation | 8/8 | **0.89** |
-| 3 — context-judgment | Context-aware judgment | 5/5 | **0.62** |
+| 1 — spam-detection | Spam vs legitimate | 10/10 | **~0.90** |
+| 2 — rule-classification | Rule violation + citation | 8/8 | **~0.85** |
+| 3 — context-judgment | Context-aware judgment | 5/5 | **~0.60** |
 
-> Episode score = `sum(per-step rewards) / num_posts`, clamped to (0.001, 0.999). Per-step rewards are in [0.0, 1.0] and unaffected by clamping. Model: `Qwen/Qwen2.5-72B-Instruct`, temperature=0.0, seed=42.
+> Episode score = `sum(per-step rewards) / num_posts`, clamped to (0.001, 0.999). Per-step rewards are in [0.0, 1.0] and unaffected by clamping. Model: `Qwen/Qwen2.5-72B-Instruct`, temperature=0.0, seed=42. Scores are approximate — exact values vary by seed and episode sample.

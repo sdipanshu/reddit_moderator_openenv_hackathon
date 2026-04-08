@@ -406,3 +406,124 @@ class TestRewardSignal:
                 assert 0.0 <= obs.reward <= 1.0, (
                     f"Task 3 reward {obs.reward} out of bounds [0.0, 1.0]"
                 )
+
+
+# ---------------------------------------------------------------------------
+# New template coverage
+# ---------------------------------------------------------------------------
+
+
+class TestNewTemplates:
+    """Regression tests for the borderline Task 1 and escalation Task 3 templates."""
+
+    # ── Template presence ────────────────────────────────────────────────────
+
+    def test_task1_borderline_templates_in_pool(self) -> None:
+        from reddit_mod_env.content_generator import ContentGenerator
+        gen = ContentGenerator()
+        ids = {t.template_id for t in gen._registry[1]}
+        assert "t1_legit_new_researcher_debut" in ids
+        assert "t1_spam_academic_disguise" in ids
+
+    def test_task3_escalation_templates_in_pool(self) -> None:
+        from reddit_mod_env.content_generator import ContentGenerator
+        gen = ContentGenerator()
+        ids = {t.template_id for t in gen._registry[3]}
+        assert "t3_escalate_veteran_account_anomaly" in ids
+        assert "t3_escalate_doxxing_risk" in ids
+        assert "t3_escalate_ban_evasion" in ids
+
+    # ── Ground truth correctness ─────────────────────────────────────────────
+
+    def test_task1_borderline_legit_correct_action(self) -> None:
+        """New-researcher template must produce approve despite the new/unknown account."""
+        import random
+        from reddit_mod_env.content_generator import (
+            ContentGenerator, _compute_task1_gt, _generate_author,
+        )
+        gen = ContentGenerator()
+        tmpl = next(t for t in gen._registry[1] if t.template_id == "t1_legit_new_researcher_debut")
+        author = _generate_author(tmpl.compatible_archetypes[0], random.Random(0))
+        gt = _compute_task1_gt(tmpl, author)
+        assert gt.correct_action == "approve"
+        assert gt.correct_rule is None
+
+    def test_task1_borderline_spam_correct_action(self) -> None:
+        """Academic-disguise template must produce remove despite polished writing."""
+        import random
+        from reddit_mod_env.content_generator import (
+            ContentGenerator, _compute_task1_gt, _generate_author,
+        )
+        gen = ContentGenerator()
+        tmpl = next(t for t in gen._registry[1] if t.template_id == "t1_spam_academic_disguise")
+        author = _generate_author(tmpl.compatible_archetypes[0], random.Random(0))
+        gt = _compute_task1_gt(tmpl, author)
+        assert gt.correct_action == "remove"
+        assert gt.correct_rule == 4  # Rule 4: No Self-Promotion / Spam
+
+    @pytest.mark.parametrize("template_id", [
+        "t3_escalate_veteran_account_anomaly",
+        "t3_escalate_doxxing_risk",
+        "t3_escalate_ban_evasion",
+    ])
+    def test_task3_escalation_ground_truth(self, template_id: str) -> None:
+        """Every new escalation template must produce escalate_to_senior_mod as correct action."""
+        import random
+        from reddit_mod_env.content_generator import (
+            ContentGenerator, _compute_task3_gt, _generate_author,
+        )
+        gen = ContentGenerator()
+        tmpl = next(t for t in gen._registry[3] if t.template_id == template_id)
+        author = _generate_author(tmpl.compatible_archetypes[0], random.Random(0))
+        gt = _compute_task3_gt(tmpl, author)
+        assert gt.correct_action == "escalate_to_senior_mod", (
+            f"{template_id}: expected escalate_to_senior_mod, got {gt.correct_action}"
+        )
+        assert "escalate_to_senior_mod" in gt.acceptable_actions
+
+    # ── Reward correctness ───────────────────────────────────────────────────
+
+    def test_escalation_cases_present_in_episodes(self) -> None:
+        """A large Task 3 episode must contain at least one escalation case."""
+        from reddit_mod_env.content_generator import ContentGenerator
+        gen = ContentGenerator()
+        scenarios = gen.generate_episode(task_level=3, num_posts=50, seed=0)
+        escalation = [gt for _, gt in scenarios if gt.correct_action == "escalate_to_senior_mod"]
+        assert escalation, "Expected at least one escalation case in a 50-post episode (seed=0)"
+
+    def test_correct_escalation_scores_high(self) -> None:
+        """Correctly escalating with the right rule citation must score >= 0.9."""
+        from reddit_mod_env.content_generator import ContentGenerator
+        from reddit_mod_env.reward import calculate_task3_reward
+        gen = ContentGenerator()
+        scenarios = gen.generate_episode(task_level=3, num_posts=50, seed=0)
+        cases = [(p, gt) for p, gt in scenarios if gt.correct_action == "escalate_to_senior_mod"]
+        assert cases, "No escalation case found — adjust seed"
+        post, gt = cases[0]
+        reward = calculate_task3_reward(
+            ModAction(action_type="escalate_to_senior_mod", rule_cited=gt.correct_rule),
+            gt,
+            post,
+        )
+        assert reward >= 0.9, f"Correct escalation should score >= 0.9, got {reward:.4f}"
+
+    def test_lazy_escalation_on_easy_case_penalised(self) -> None:
+        """Escalating on a low-difficulty case must score less than the correct action."""
+        from reddit_mod_env.content_generator import ContentGenerator
+        from reddit_mod_env.reward import calculate_task3_reward
+        gen = ContentGenerator()
+        scenarios = gen.generate_episode(task_level=3, num_posts=100, seed=42)
+        easy = [
+            (p, gt) for p, gt in scenarios
+            if gt.correct_action == "approve" and gt.difficulty_score < 0.75
+        ]
+        if not easy:
+            pytest.skip("No easy approve case in sample — adjust seed")
+        post, gt = easy[0]
+        r_correct = calculate_task3_reward(ModAction(action_type="approve"), gt, post)
+        r_lazy_esc = calculate_task3_reward(
+            ModAction(action_type="escalate_to_senior_mod"), gt, post
+        )
+        assert r_lazy_esc < r_correct, (
+            f"Lazy escalation ({r_lazy_esc:.3f}) should score below correct approve ({r_correct:.3f})"
+        )

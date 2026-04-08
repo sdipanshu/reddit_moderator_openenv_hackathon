@@ -243,7 +243,7 @@ class ContentTemplate:
 
 
 # ---------------------------------------------------------------------------
-# Task 1 templates — Spam Detection (12 spam + 13 legit = 25 templates)
+# Task 1 templates — Spam Detection (13 spam + 13 legit = 26 templates)
 # ---------------------------------------------------------------------------
 
 
@@ -1207,6 +1207,115 @@ def _task1_templates() -> List[ContentTemplate]:  # noqa: PLR0915
                 "score_range": (500, 12000),
                 "comments_range": (50, 600),
                 "explanation": "Official scientific organisation report with primary source links.",
+            },
+        ),
+
+        # ── BORDERLINE — deceptive surface signals ────────────────────────────
+        ContentTemplate(
+            template_id="t1_legit_new_researcher_debut",
+            category="legit",
+            title_templates=[
+                "My first post: just published our {field} paper in {journal}",
+                "Sharing my PhD work on {topic} — just published in {journal}",
+                "New here — wanted to share our {field} findings [OC]",
+            ],
+            body_template=(
+                "Hi r/science, long-time lurker, first post. My team just published in {journal}. "
+                "We studied {topic} using {method} and found {finding}. "
+                "Paper is open access: {doi}. I'm the {role} — happy to answer questions."
+            ),
+            placeholder_pools={
+                "field": ["neuroscience", "climate", "genomics", "epidemiology"],
+                "journal": ["Nature Communications", "PLOS ONE", "eLife", "PNAS"],
+                "topic": [
+                    "hippocampal neuroplasticity in aging adults",
+                    "methane flux variability in Arctic permafrost",
+                    "CRISPR off-target effects in somatic cells",
+                    "long COVID symptom persistence in vaccinated adults",
+                ],
+                "method": [
+                    "longitudinal cohort analysis",
+                    "randomised controlled trial",
+                    "meta-analysis of 48 studies",
+                    "whole-genome sequencing",
+                ],
+                "finding": [
+                    "a significant correlation between sleep quality and memory consolidation",
+                    "a 23% faster rate of thaw than previous models predicted",
+                    "substantially lower off-target rates than earlier Cas9 variants",
+                    "symptom resolution lagged serological clearance by 8–12 weeks",
+                ],
+                "doi": [
+                    "doi.org/10.1038/s41467-024-abc",
+                    "doi.org/10.1371/journal.pone.abc",
+                    "doi.org/10.7554/eLife.12345",
+                ],
+                "role": ["lead author", "second author", "corresponding author"],
+            },
+            base_rule=None,
+            base_action="approve",
+            compatible_archetypes=["brand_new", "new_genuine"],
+            flair_options=["Research"],
+            report_configs=[
+                [("Spam / Self-promotion", 1)],
+                [],
+            ],
+            thread_context_pool=None,
+            signals={
+                "base_difficulty": 0.55,
+                "score_range": (5, 200),
+                "comments_range": (0, 15),
+                "explanation": (
+                    "A first-time poster sharing their own published research with a legitimate DOI. "
+                    "The brand-new account and self-referential framing look suspicious, "
+                    "but the content is substantive and the link is a real paper. Approve."
+                ),
+            },
+        ),
+        ContentTemplate(
+            template_id="t1_spam_academic_disguise",
+            category="spam",
+            title_templates=[
+                "New {journal} meta-analysis: {compound} shows {outcome}",
+                "Peer-reviewed evidence for {compound} — {journal} 2024",
+                "Study: {compound} supplementation linked to {outcome}",
+            ],
+            body_template=(
+                "A recent meta-analysis of {n} trials in {journal} found {compound} "
+                "significantly {verb} {outcome} (p<0.001, 95% CI). "
+                "The mechanism involves {mechanism}. Lead researcher {name} commented: "
+                "'This is one of the most robust findings in the field.' "
+                "The formula used in the trials is available at {url} — code {code} for {disc}% off."
+            ),
+            placeholder_pools={
+                "journal": ["Frontiers in Nutrition", "Nutrients", "Journal of Nutritional Science"],
+                "n": ["14", "22", "31"],
+                "compound": ["resveratrol", "berberine", "NMN", "ashwagandha"],
+                "verb": ["improved", "increased", "enhanced", "reduced"],
+                "outcome": ["cognitive function", "metabolic markers", "inflammatory biomarkers", "sleep quality"],
+                "mechanism": ["mitochondrial biogenesis", "mTOR pathway modulation", "cortisol regulation"],
+                "name": ["Dr. James Harlow (Stanford)", "Prof. Elena Vasquez (MIT)", "Dr. Wei Chen (Oxford)"],
+                "url": ["purescience.co/buy", "clinicalgrade.com/order", "labgrade.io/shop"],
+                "code": ["SCIENCE20", "RESEARCH15"],
+                "disc": ["20", "15"],
+            },
+            base_rule=4,
+            base_action="remove",
+            compatible_archetypes=["mid_user", "active_contributor"],
+            flair_options=["Research"],
+            report_configs=[
+                [("Spam / Advertising", 3)],
+                [("Spam", 2), ("Misinformation", 1)],
+            ],
+            thread_context_pool=None,
+            signals={
+                "base_difficulty": 0.6,
+                "score_range": (10, 120),
+                "comments_range": (2, 20),
+                "explanation": (
+                    "Sophisticated supplement spam using real journal names, invented researcher quotes, "
+                    "and plausible statistics. The purchase link and discount code reveal commercial intent. Remove."
+                ),
             },
         ),
     ]
@@ -2297,7 +2406,7 @@ def _task2_templates() -> List[ContentTemplate]:  # noqa: PLR0915
 
 
 # ---------------------------------------------------------------------------
-# Task 3 templates — Context-Aware Moderation (25 templates)
+# Task 3 templates — Context-Aware Moderation (28 templates)
 # ---------------------------------------------------------------------------
 
 
@@ -3070,6 +3179,145 @@ def _task3_templates() -> List[ContentTemplate]:  # noqa: PLR0915
                 "severity": "moderate",
                 "base_acceptable": ["remove"],
                 "explanation": "Conspiracy framing with no evidence. Remove. Serial offenders warrant temp_ban.",
+            },
+        ),
+
+        # ── ESCALATION REQUIRED ───────────────────────────────────────────────
+        ContentTemplate(
+            template_id="t3_escalate_veteran_account_anomaly",
+            category="t3_escalate",
+            title_templates=[None],
+            body_template=(
+                "This is all {adjective} propaganda. The {institution} has been covering up "
+                "{claim} for decades. Wake up — the peer review system is a {epithet}. "
+                "Real scientists already know this but won't say it publicly."
+            ),
+            placeholder_pools={
+                "adjective": ["establishment", "corporate", "Big Pharma"],
+                "institution": ["WHO", "FDA", "CDC", "IPCC"],
+                "claim": [
+                    "that mRNA vaccines alter DNA permanently",
+                    "that CO2 warming is negligible",
+                    "that cancer has had a suppressed cure since the 1970s",
+                ],
+                "epithet": ["gatekeeping racket", "corruption machine", "controlled filter"],
+            },
+            base_rule=3,
+            base_action="remove",
+            compatible_archetypes=["veteran_expert"],
+            flair_options=[None],
+            report_configs=[
+                [("Misinformation / Conspiracy", 8), ("Unusual post from trusted account", 4)],
+                [("Out of character for this account", 3)],
+            ],
+            thread_context_pool=[
+                ["This account has 15,000 karma and has historically posted excellent peer-reviewed content."],
+                ["Account is 2,800 days old with a strong history of evidence-based discussion — this post is completely out of character."],
+            ],
+            signals={
+                "base_difficulty": 0.9,
+                "severity": "severe",
+                "requires_escalation": True,
+                "alt_acceptable": ["remove"],
+                "explanation": (
+                    "Conspiracy content from a veteran account that has previously posted high-quality science. "
+                    "The abrupt behavioural shift suggests possible account compromise. "
+                    "Unilaterally banning a high-karma trusted contributor without senior review risks a serious mistake. Escalate."
+                ),
+            },
+        ),
+        ContentTemplate(
+            template_id="t3_escalate_doxxing_risk",
+            category="t3_escalate",
+            title_templates=[None],
+            body_template=(
+                "I looked up the lead author of this study. They work at {institution}, "
+                "live in {location}, and their personal {contact} is publicly findable. "
+                "Given their {finding}, I think the community deserves to know who is really behind this research."
+            ),
+            placeholder_pools={
+                "institution": ["a small private lab in Austin, TX", "the Whitehead Institute", "a Gates-funded research centre"],
+                "location": ["the suburbs of Boston", "Cambridge, UK", "Palo Alto"],
+                "contact": ["home address", "personal email", "phone number"],
+                "finding": [
+                    "pro-industry conclusions on seed patents",
+                    "vaccine trial results",
+                    "climate modelling assumptions",
+                ],
+            },
+            base_rule=2,
+            base_action="remove",
+            compatible_archetypes=["mid_user", "serial_offender", "first_offender"],
+            flair_options=[None],
+            report_configs=[
+                [("Personal information / Doxxing risk", 6)],
+                [("Harassment", 5), ("Personal attack on researcher", 3)],
+            ],
+            thread_context_pool=[
+                ["Thread discussing a controversial paper on dietary guidelines"],
+                ["Discussion of a study on vaccine safety that has attracted media attention"],
+                ["Thread about a high-profile climate modelling paper"],
+            ],
+            signals={
+                "base_difficulty": 0.92,
+                "severity": "severe",
+                "requires_escalation": True,
+                "alt_acceptable": ["remove"],
+                "explanation": (
+                    "Post includes personal identifying information about a named researcher "
+                    "(location, contact details). This carries legal and safety risks beyond "
+                    "standard moderation. Removing is better than nothing, but senior review "
+                    "and possible platform-level action is needed. Escalate."
+                ),
+            },
+        ),
+        ContentTemplate(
+            template_id="t3_escalate_ban_evasion",
+            category="t3_escalate",
+            title_templates=[
+                "Revisiting my earlier points on {topic}",
+                "I keep getting censored for discussing {topic} — trying again",
+                "Why does r/science keep removing posts about {topic}?",
+            ],
+            body_template=(
+                "As I've said many times before — though my posts keep getting removed — {claim}. "
+                "I've been posting about {topic} for years. "
+                "The evidence is in {source} and any honest scientist would agree. "
+                "Happy to debate anyone who actually reads the literature."
+            ),
+            placeholder_pools={
+                "topic": ["vaccine injury underreporting", "ivermectin efficacy", "EMF health risks"],
+                "claim": [
+                    "the official guidance directly contradicts several large RCTs",
+                    "the suppressed studies show a completely different picture",
+                    "the data has been consistently misrepresented in the mainstream literature",
+                ],
+                "source": [
+                    "the Cochrane reviews they don't publicise",
+                    "pre-print servers that peer review ignores",
+                    "VAERS data that gets buried",
+                ],
+            },
+            base_rule=3,
+            base_action="warn",
+            compatible_archetypes=["brand_new", "new_genuine"],
+            flair_options=["Discussion"],
+            report_configs=[
+                [("Possible ban evasion", 5), ("Misinformation", 3)],
+                [("Repeat rule violations", 4)],
+            ],
+            thread_context_pool=None,
+            signals={
+                "base_difficulty": 0.88,
+                "severity": "moderate",
+                "requires_escalation": True,
+                "alt_acceptable": ["warn", "remove"],
+                "explanation": (
+                    "New account posting in a pattern consistent with a previously banned user: "
+                    "references to 'earlier points', claims of systematic censorship, "
+                    "and identical topic focus. Possible ban evasion requires senior mod investigation — "
+                    "a single moderator should not act unilaterally on suspicion alone. Escalate."
+                ),
             },
         ),
     ]
